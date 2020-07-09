@@ -160,32 +160,58 @@ def populate_aggregated_jsons(path):
                     "onset\tduration\ttrial_type\tresponse_time\tstim_file"
                     "\tTODO -- fill in rows and add more tab-separated "
                     "columns if desired")
-    # extract tasks files stubs
-    for task_acq, fields in tasks.items():
-        task_file = op.join(path, task_acq + '_bold.json')
-        # Since we are pulling all unique fields we have to possibly
-        # rewrite this file to guarantee consistency.
-        # See https://github.com/nipy/heudiconv/issues/277 for a usecase/bug
-        # when we didn't touch existing one.
-        # But the fields we enter (TaskName and CogAtlasID) might need need
-        # to be populated from the file if it already exists
-        placeholders = {
-            "TaskName": ("TODO: full task name for %s" %
-                         task_acq.split('_')[0].split('-')[1]),
-            "CogAtlasID": "TODO",
-        }
-        if op.lexists(task_file):
-            j = load_json(task_file)
-            # Retain possibly modified placeholder fields
-            for f in placeholders:
-                if f in j:
-                    placeholders[f] = j[f]
-            act = "Regenerating"
+    
+
+    # try to add asl 
+    for fpath1 in find_files('.*_task-.*\_asl\.json', topdir=path,
+                            exclude_vcs=True,
+                            exclude="/\.(datalad|heudiconv)/"):
+        #
+        # According to BIDS spec I think both _task AND _acq (may be more?
+        # _rec, _dir, ...?) should be retained?
+        # TODO: if we are to fix it, then old ones (without _acq) should be
+        # removed first
+        task = re.sub('.*_(task-[^_\.]*(_acq-[^_\.]*)?)_.*', r'\1', fpath1)
+        json_ = load_json(fpath1)
+        if task not in tasks:
+            tasks[task] = json_
         else:
-            act = "Generating"
-        lgr.debug("%s %s", act, task_file)
-        fields.update(placeholders)
-        save_json(task_file, fields, sort_keys=True, pretty=True)
+            rec = tasks[task]
+            # let's retain only those fields which have the same value
+            for field in sorted(rec):
+                if field not in json_ or json_[field] != rec[field]:
+                    del rec[field]
+        # create a stub onsets file for each one of those
+        suf = '_asl.json'
+        assert fpath1.endswith(suf)
+        # specify the name of the '_events.tsv' file:
+        if '_echo-' in fpath1:
+            # multi-echo sequence: bids (1.1.0) specifies just one '_events.tsv'
+            #   file, common for all echoes.  The name will not include _echo-.
+            # TODO: RF to use re.match for better readability/robustness
+            # So, find out the echo number:
+            fpath_split = fpath1.split('_echo-', 1)         # split fpath using '_echo-'
+            fpath_split_2 = fpath_split[1].split('_', 1)   # split the second part of fpath_split using '_'
+            echoNo = fpath_split_2[0]                      # get echo number
+            if echoNo == '1':
+                if len(fpath_split_2) != 2:
+                    raise ValueError("Found no trailer after _echo-")
+                # we modify fpath to exclude '_echo-' + echoNo:
+                fpath1 = fpath_split[0] + '_' + fpath_split_2[1]
+            else:
+                # for echoNo greater than 1, don't create the events file, so go to
+                #   the next for loop iteration:
+                continue
+
+        events_file = fpath1[:-len(suf)] + '_aslcontext.tsv'
+        # do not touch any existing thing, it may be precious
+        if not op.lexists(events_file):
+            lgr.debug("Generating %s", events_file)
+            with open(events_file, 'w') as f:
+                f.write(
+                    "onset\tduration\ttrial_type\tresponse_time\tstim_file"
+                    "\tTODO -- fill in rows and add more tab-separated "
+                    "columns if desired")
 
 
 def tuneup_bids_json_files(json_files):
